@@ -96,15 +96,18 @@ def main():
     log(f"R_75 analysé. H1:{tend_h1} M30:{tend_m30} Signal: {sig}")
     
     prix = df_15["c"].iloc[-1]
-    sma3 = df_15["sma_f"].iloc[-1] if "sma_f" in df_15 else df_15["c"].rolling(SMA_FAST).mean().iloc[-1]
-    sma25 = df_15["sma_s"].iloc[-1] if "sma_s" in df_15 else df_15["c"].rolling(SMA_SLOW).mean().iloc[-1]
+    sma3 = df_15["c"].rolling(SMA_FAST).mean().iloc[-1]
+    sma25 = df_15["c"].rolling(SMA_SLOW).mean().iloc[-1]
     
-    # --- CONSTRUCTION DU RAPPORT PÉDAGOGIQUE ---
-    texte = f"📊 **RAPPORT R_75** - {now.strftime('%a %d/%m %H:%M')}\n\n"
+    # Texte du rapport (sans backslash)
+    texte = f"📊 **RAPPORT SMA R_75** - {now.strftime('%a %d/%m %H:%M')}\n\n"
     texte += f"🔹 **TENDANCE DE FOND**\n"
     texte += f"• H1 : {tend_h1}\n"
     texte += f"• M30 : {tend_m30}\n"
-    texte += f"• Alignement : {'✅ OUI (Les deux sont en ' + tend_h1 + ')' if aligne else '❌ NON (H1 et M30 ne sont pas d\\'accord)'}\n\n"
+    if aligne:
+        texte += f"• Alignement : ✅ OUI (Les deux sont en {tend_h1})\n\n"
+    else:
+        texte += f"• Alignement : ❌ NON (H1 et M30 ne sont pas d'accord)\n\n"
     
     texte += f"🔸 **M15 (Entrée)**\n"
     texte += f"• Prix actuel : {prix:.2f}\n"
@@ -134,7 +137,6 @@ def main():
         texte += f"• Le marché n'offre pas d'opportunité claire pour le moment.\n"
         texte += f"• Reste patient, le bot te préviendra dès qu'un signal apparaîtra.\n"
 
-    # --- ENVOI ---
     topic = CONFIG["topics"]["principal"]
     if CONFIG["mode_affichage"] == "RAPPORT" or sig:
         for tf, df, tend in [("H1", df_60, tend_h1), ("M30", df_30, tend_m30), ("M15", df_15, tend_h1)]:
