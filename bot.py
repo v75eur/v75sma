@@ -44,7 +44,9 @@ def tendance(df):
     df["sma_f"] = df["c"].rolling(SMA_FAST).mean()
     df["sma_s"] = df["c"].rolling(SMA_SLOW).mean()
     last = df.iloc[-1]
-    return "HAUSSE" if last["sma_f"] > last["sma_s"] else ("BAISSE" if last["sma_f"] < last["sma_s"] else "NEUTRE")
+    if last["sma_f"] > last["sma_s"]: return "HAUSSE"
+    if last["sma_f"] < last["sma_s"]: return "BAISSE"
+    return "NEUTRE"
 
 def check_sma_croisement(df, sens):
     df["sma_f"] = df["c"].rolling(SMA_FAST).mean()
@@ -64,10 +66,11 @@ def figure(df, tend, sig, tf_label):
         col = '#26a69a' if r['c'] >= r['o'] else '#ef5350'
         ax.plot([i, i], [r['l'], r['h']], color=col, lw=1.2)
         ax.add_patch(Rectangle((i-0.3, min(r['o'], r['c'])), 0.6, abs(r['o']-r['c']), facecolor=col, edgecolor=col))
-    ax.plot(df.index, df["sma_f"], color="cyan", lw=1.2)
-    ax.plot(df.index, df["sma_s"], color="yellow", lw=1.2)
+    ax.plot(df.index, df["sma_f"], color="cyan", lw=1.2, label="SMA 3")
+    ax.plot(df.index, df["sma_s"], color="yellow", lw=1.2, label="SMA 25")
     ax.set_title(f"R_75 - {tf_label} | {tend} | {sig or ''}", color="white")
     ax.tick_params(colors='white'); ax.grid(color='#333333', ls='--', alpha=0.5)
+    ax.legend(loc="upper left", facecolor='#1e1e1e', labelcolor='white')
     fig.tight_layout()
     buf = io.BytesIO(); fig.savefig(buf, format="png", facecolor=fig.get_facecolor()); plt.close(fig)
     return buf.getvalue()
@@ -92,6 +95,46 @@ def main():
     
     log(f"R_75 analysé. H1:{tend_h1} M30:{tend_m30} Signal: {sig}")
     
+    prix = df_15["c"].iloc[-1]
+    sma3 = df_15["sma_f"].iloc[-1] if "sma_f" in df_15 else df_15["c"].rolling(SMA_FAST).mean().iloc[-1]
+    sma25 = df_15["sma_s"].iloc[-1] if "sma_s" in df_15 else df_15["c"].rolling(SMA_SLOW).mean().iloc[-1]
+    
+    # --- CONSTRUCTION DU RAPPORT PÉDAGOGIQUE ---
+    texte = f"📊 **RAPPORT R_75** - {now.strftime('%a %d/%m %H:%M')}\n\n"
+    texte += f"🔹 **TENDANCE DE FOND**\n"
+    texte += f"• H1 : {tend_h1}\n"
+    texte += f"• M30 : {tend_m30}\n"
+    texte += f"• Alignement : {'✅ OUI (Les deux sont en ' + tend_h1 + ')' if aligne else '❌ NON (H1 et M30 ne sont pas d\\'accord)'}\n\n"
+    
+    texte += f"🔸 **M15 (Entrée)**\n"
+    texte += f"• Prix actuel : {prix:.2f}\n"
+    texte += f"• SMA 3 : {sma3:.2f}\n"
+    texte += f"• SMA 25 : {sma25:.2f}\n\n"
+    
+    texte += f"🎯 **SIGNAL**\n"
+    if sig:
+        texte += f"• {sig} CONFIRMÉ ! ✅\n"
+        texte += f"• Le croisement à la clôture est validé.\n"
+        texte += f"• Conseil : Tu peux envisager une entrée manuelle.\n"
+    else:
+        if not aligne:
+            texte += f"• Aucun signal. ⏳\n"
+            texte += f"• Raison : H1 et M30 ne sont pas alignés. Le bot attend que la tendance soit claire.\n"
+            texte += f"• Conseil : Patiente, ne trade pas contre la tendance.\n"
+        else:
+            texte += f"• Aucun signal. ⏳\n"
+            texte += f"• Raison : Tendance alignée ({tend_h1}), mais aucun croisement SMA confirmé sur M15.\n"
+            texte += f"• Conseil : Attends un croisement haussier (SMA 3 passe au-dessus de SMA 25) pour un achat, ou baissier pour une vente.\n"
+            
+    texte += f"\n💡 **CONSEIL DU BOT**\n"
+    if sig:
+        texte += f"• Vérifie les news économiques avant d'entrer.\n"
+        texte += f"• Place ton Stop Loss sous le dernier creux (achat) ou au-dessus du dernier sommet (vente).\n"
+    else:
+        texte += f"• Le marché n'offre pas d'opportunité claire pour le moment.\n"
+        texte += f"• Reste patient, le bot te préviendra dès qu'un signal apparaîtra.\n"
+
+    # --- ENVOI ---
     topic = CONFIG["topics"]["principal"]
     if CONFIG["mode_affichage"] == "RAPPORT" or sig:
         for tf, df, tend in [("H1", df_60, tend_h1), ("M30", df_30, tend_m30), ("M15", df_15, tend_h1)]:
@@ -99,8 +142,6 @@ def main():
             post_ntfy(topic, f"R_75 - {tf}", img, f"R_75 {tf}")
             time.sleep(1.5)
         
-        prix = df_15["c"].iloc[-1]
-        texte = f"📊 RAPPORT R_75 - {now.strftime('%a %d/%m %H:%M')}\nH1 : {tend_h1}\nM30 : {tend_m30}\nAligné : {'OUI' if aligne else 'NON'}\nSignal : {sig or 'Aucun'}\nPrix : {prix:.2f}"
-        post_ntfy(topic, texte, None, "R_75 Rapport")
+        post_ntfy(topic, texte, None, "Rapport R_75")
 
 if __name__ == "__main__": main()
