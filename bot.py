@@ -9,11 +9,17 @@ import pandas as pd
 BENIN = pytz.timezone('Africa/Porto-Novo')
 CONFIG = json.load(open("config.json"))
 SMA_FAST, SMA_SLOW = 3, 25
+JOURNAL_FILE = "journal.json"
 
-FOREX_SYMBOLS = {"XAUUSD": "GC=F", "XAGUSD": "SI=F", "EURUSD": "EURUSD=X", "GBPUSD": "GBPUSD=X", "USDJPY": "USDJPY=X", "USDCHF": "USDCHF=X", "USDCAD": "USDCAD=X", "AUDUSD": "AUDUSD=X", "NZDUSD": "NZDUSD=X", "EURGBP": "EURGBP=X", "EURJPY": "EURJPY=X", "GBPJPY": "GBPJPY=X", "AUDJPY": "AUDJPY=X", "EURAUD": "EURAUD=X", "EURCHF": "EURCHF=X", "EURNZD": "EURNZD=X", "GBPCHF": "GBPCHF=X", "GBPAUD": "GBPAUD=X", "GBPNZD": "GBPNZD=X", "AUDNZD": "AUDNZD=X", "AUDCAD": "AUDCAD=X", "AUDCHF": "AUDCHF=X", "CADJPY": "CADJPY=X", "CHFJPY": "CHFJPY=X", "NZDJPY": "NZDJPY=X", "CADCHF": "CADCHF=X", "NZDCAD": "NZDCAD=X", "NZDCHF": "NZDCHF=X"}
-DERIV_SYMBOLS = {"R_10": "R_10", "R_25": "R_25", "R_50": "R_50", "R_75": "R_75", "R_100": "R_100", "CRASH_500": "CRASH500", "CRASH_1000": "CRASH1000", "BOOM_500": "BOOM500", "BOOM_1000": "BOOM1000"}
+if not os.path.exists(JOURNAL_FILE):
+    json.dump({"trades": [], "solde": CONFIG["backtest"]["solde_depart"]}, open(JOURNAL_FILE, "w"))
+JOURNAL = json.load(open(JOURNAL_FILE))
+
+FOREX_SYMBOLS = {"XAUUSD": "GC=F", "EURUSD": "EURUSD=X", "GBPUSD": "GBPUSD=X"}
+DERIV_SYMBOLS = {"R_75": "R_75"}
 
 def log(m): print(f"[{datetime.now().strftime('%H:%M:%S')}] {m}", flush=True)
+def sauvegarder_journal(): json.dump(JOURNAL, open(JOURNAL_FILE, "w"))
 
 def post_ntfy(url, msg, img=None, title=None):
     if not url: return
@@ -68,6 +74,108 @@ def check_sma_croisement(df, sens):
     if sens == "BAISSE" and a["sma_f"] >= a["sma_s"] and b["sma_f"] < b["sma_s"]: return "VENTE"
     return None
 
+def verifier_trades(df_15):
+    trades = JOURNAL["trades"]
+    solde = JOURNAL["solde"]
+    updated = False
+    for t in trades:
+        if t["statut"] == "FERME": continue
+        for i in range(t.get("idx_ouverture", 0) + 1, len(df_15)):
+            r = df_15.iloc[i]
+            if t["sens"] == "ACHAT":
+                if r["l"] <= t["sl"]: t["statut"] = "FERME"; t["resultat"] = "LOSS"; solde -= t["risque"]; break
+                if r["h"] >= t["tp1"] and not t["tp1_touche"]: t["tp1_touche"] = True; solde += t["gain_tp1"]; t["sl"] = t["entree"]; updated = True
+                if r["h"] >= t["tp2"]: t["statut"] = "FERME"; t["resultat"] = "WIN"; solde += t["gain_tp2"]; break
+            else:
+                if r["h"] >= t["sl"]: t["statut"] = "FERME"; t["resultat"] = "LOSS"; solde -= t["risque"]; break
+                if r["l"] <= t["tp1"] and not t["tp1_touche"]: t["tp1_touche"] = True; solde += t["gain_tp1"]; t["sl"] = t["entree"]; updated = True
+                if t["l"] <= t["tp2"]: t["statut"] = "FERME"; t["resultat"] = "WIN"; solde += t["gain_tp2"]; break
+    JOURNAL["solde"] = solde
+    if updated: sauvegarder_journal()
+
+def ouvrir_trade(sens, prix, atr, idx, now):
+    cfg = CONFIG["backtest"]
+    sl_dist = atr * cfg["ratio_sl"]
+    tp1_dist = sl_dist * cfg["ratio_tp1"]
+    tp2_dist = sl_dist * cfg["ratio_tp2"]
+    if sens == "ACHAT": sl = prix - sl_dist; tp1 = prix + tp1_dist; tp2 = prix + tp2_dist
+    else: sl = prix + sl_dist; tp1 = prix - tp1_dist; tp2 = prix - tp2_dist
+    trade = {"date": str(now), "sens": sens, "entree": prix, "sl": sl, "tp1": tp1, "tp2": tp2,
+             "tp1_touche": False, "risque": abs(sl_dist * cfg["valeur_pip"] * 100),
+             "gain_tp1": abs(tp1_dist * cfg["valeur_pip"] * 100), "gain_tp2": abs(tp2_dist * cfg["valeur_pip"] * 100),
+             "statut": "EN COURS", "resultat": None, "idx_ouverture": idx}
+    JOURNAL["trades"].append(trade)
+    sauvegarder_journal()
+    log(f"BACKTEST : {sens} ouvert à {prix:.2f}")
+
+def generer_rapport_professionnel():
+    t = JOURNAL["trades"]
+    solde = JOURNAL["solde"]
+    depart = CONFIG["backtest"]["solde_depart"]
+    
+    # On ne prend que les trades fermés pour les stats
+    fermes = [x for x in t if x["statut"] == "FERME"]
+    gagnants = [x for x in fermes if x.get("resultat") == "WIN"]
+    perdants = [x for x in fermes if x.get("resultat") == "LOSS"]
+    
+    total = len(fermes)
+    wr = (len(gagnants) / total * 100) if total > 0 else 0
+    
+    # Calcul du P&L
+    pnl = solde - depart
+    
+    # Calcul des gains/pertes moyens
+    gain_moyen = sum(x["gain_tp2"] for x in gagnants) / len(gagnants) if gagnants else 0
+    perte_moyenne = sum(x["risque"] for x in perdants) / len(perdants) if perdants else 0
+    
+    # Profit Factor
+    total_gains = sum(x["gain_tp2"] for x in gagnants)
+    total_pertes = sum(x["risque"] for x in perdants)
+    profit_factor = total_gains / total_pertes if total_pertes > 0 else 0
+    
+    # Drawdown (simplifié : la plus grosse perte consécutive)
+    max_dd = 0
+    current_dd = 0
+    for x in fermes:
+        if x.get("resultat") == "LOSS":
+            current_dd += x["risque"]
+            max_dd = max(max_dd, current_dd)
+        else:
+            current_dd = 0
+    
+    # Série de gains/pertes
+    serie = "".join(["W" if x.get("resultat") == "WIN" else "L" for x in fermes[-10:]])
+    
+    txt = f"\n\n📊 **STATISTIQUES DE TRADING**\n"
+    txt += f"━━━━━━━━━━━━━━━━━━━━━\n"
+    txt += f"💰 **COMPTE**\n"
+    txt += f"• Solde : {solde:.2f}$ (Départ : {depart:.2f}$)\n"
+    txt += f"• P&L : {pnl:+.2f}$ ({(pnl/depart*100):+.1f}%)\n"
+    txt += f"━━━━━━━━━━━━━━━━━━━━━\n"
+    txt += f"📈 **PERFORMANCE**\n"
+    txt += f"• Trades : {total} ({len(gagnants)}W / {len(perdants)}L)\n"
+    txt += f"• Winrate : {wr:.0f}%\n"
+    txt += f"• Profit Factor : {profit_factor:.2f}\n"
+    txt += f"• Gain moyen : {gain_moyen:.2f}$\n"
+    txt += f"• Perte moyenne : {perte_moyenne:.2f}$\n"
+    txt += f"• Drawdown max : {max_dd:.2f}$\n"
+    txt += f"• Série récente : {serie if serie else 'Aucune'}\n"
+    txt += f"━━━━━━━━━━━━━━━━━━━━━\n"
+    
+    en_cours = [x for x in t if x["statut"] == "EN COURS"]
+    if en_cours:
+        d = en_cours[-1]
+        txt += f"🔹 **TRADE EN COURS**\n"
+        txt += f"• Sens : {d['sens']}\n"
+        txt += f"• Entrée : {d['entree']:.2f}\n"
+        txt += f"• SL : {d['sl']:.2f}\n"
+        txt += f"• TP1 : {d['tp1']:.2f} {'✅ Touché' if d['tp1_touche'] else '⏳'}\n"
+        txt += f"• TP2 : {d['tp2']:.2f} ⏳\n"
+        if d['tp1_touche']: txt += f"• Break-Even : ✅ SL remonté à {d['sl']:.2f}\n"
+    else:
+        txt += f"🔹 Aucun trade en cours. En attente d'un signal.\n"
+    return txt
+
 def figure(df, tend, sig, tf_label, pair_name):
     df = df.tail(50).reset_index(drop=True)
     df["sma_f"] = df["c"].rolling(SMA_FAST).mean()
@@ -100,6 +208,8 @@ def analyser(pair_key, source, now):
             
         if df_15 is None or df_30 is None or df_60 is None: return
         
+        verifier_trades(df_15)
+        
         tend_h1 = tendance(df_60)
         tend_m30 = tendance(df_30)
         aligne = (tend_h1 == tend_m30 and tend_h1 in ("HAUSSE", "BAISSE"))
@@ -110,49 +220,35 @@ def analyser(pair_key, source, now):
         
         log(f"{pair_key} ({source}) analysé. H1:{tend_h1} M30:{tend_m30} Signal: {sig}")
         
-        prix = df_15["c"].iloc[-1]
-        sma3 = df_15["c"].rolling(SMA_FAST).mean().iloc[-1]
-        sma25 = df_15["c"].rolling(SMA_SLOW).mean().iloc[-1]
+        if sig and not any(x["statut"] == "EN COURS" for x in JOURNAL["trades"]):
+            atr = (df_15["h"] - df_15["l"]).rolling(14).mean().iloc[-1]
+            ouvrir_trade(sig, df_15["c"].iloc[-1], atr, len(df_15)-1, now)
         
         texte = f"📊 **RAPPORT SMA {pair_key}** - {now.strftime('%a %d/%m %H:%M')}\n\n"
-        texte += f"🔹 **TENDANCE DE FOND**\n• H1 : {tend_h1}\n• M30 : {tend_m30}\n"
-        if aligne: texte += f"• Alignement : ✅ OUI (Les deux sont en {tend_h1})\n\n"
-        else: texte += f"• Alignement : ❌ NON (H1 et M30 ne sont pas d'accord)\n\n"
-        
-        texte += f"🔸 **M15 (Entrée)**\n• Prix actuel : {prix:.2f}\n• SMA 3 : {sma3:.2f}\n• SMA 25 : {sma25:.2f}\n\n"
-        
+        texte += f"🔹 **TENDANCE**\n• H1 : {tend_h1}\n• M30 : {tend_m30}\n"
+        texte += f"• Alignement : {'✅ OUI' if aligne else '❌ NON'}\n\n"
         texte += f"🎯 **SIGNAL**\n"
-        if sig:
-            texte += f"• {sig} CONFIRMÉ ! ✅\n• Le croisement à la clôture est validé.\n• Conseil : Tu peux envisager une entrée manuelle.\n"
+        if sig: texte += f"• {sig} CONFIRMÉ ! ✅\n"
         else:
-            if not aligne:
-                texte += f"• Aucun signal. ⏳\n• Raison : H1 et M30 ne sont pas alignés.\n• Conseil : Patiente, ne trade pas contre la tendance.\n"
-            else:
-                texte += f"• Aucun signal. ⏳\n• Raison : Tendance alignée ({tend_h1}), mais aucun croisement SMA confirmé sur M15.\n• Conseil : Attends un croisement.\n"
-                
-        texte += f"\n💡 **CONSEIL DU BOT**\n"
-        if sig: texte += f"• Vérifie les news avant d'entrer.\n• Place ton Stop Loss sous le dernier creux (achat) ou au-dessus du dernier sommet (vente).\n"
-        else: texte += f"• Le marché n'offre pas d'opportunité claire pour le moment.\n• Reste patient, le bot te préviendra.\n"
-
+            if not aligne: texte += f"• Aucun signal (H1/M30 non alignés).\n"
+            else: texte += f"• Aucun signal (pas de croisement).\n"
+        
+        texte += generer_rapport_professionnel()
+        
         topic = CONFIG["topics"]["principal"]
-        if CONFIG["mode_affichage"] == "RAPPORT" or sig:
-            for tf, df, tend in [("H1", df_60, tend_h1), ("M30", df_30, tend_m30), ("M15", df_15, tend_h1)]:
-                img = figure(df, tend, sig if tf == "M15" else None, tf, pair_key)
-                post_ntfy(topic, f"{pair_key} - {tf}", img, f"{pair_key} {tf}")
-                time.sleep(1.5)
-            
-            post_ntfy(topic, texte, None, f"Rapport SMA {pair_key}")
-            log(f"Envoyé à Admin pour {pair_key}")
+        for tf, df, tend in [("H1", df_60, tend_h1), ("M30", df_30, tend_m30), ("M15", df_15, tend_h1)]:
+            img = figure(df, tend, sig if tf == "M15" else None, tf, pair_key)
+            post_ntfy(topic, f"{pair_key} - {tf}", img, f"{pair_key} {tf}")
+            time.sleep(1.5)
+        post_ntfy(topic, texte, None, f"Rapport SMA {pair_key}")
     except Exception as e: log(f"Erreur {pair_key}: {e}")
 
 def main():
     now = datetime.now(BENIN)
     log("DÉMARRAGE SMA")
-    
     if CONFIG["marches"]["forex"]["actif"]:
         for k in CONFIG["marches"]["forex"]["paires"]:
             if CONFIG["marches"]["forex"]["paires"][k]: analyser(k, "yahoo", now)
-            
     if CONFIG["marches"]["deriv"]["actif"]:
         for k in CONFIG["marches"]["deriv"]["indices"]:
             if CONFIG["marches"]["deriv"]["indices"][k]: analyser(k, "deriv", now)
