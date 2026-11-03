@@ -83,13 +83,13 @@ def verifier_trades(df_15):
         for i in range(t.get("idx_ouverture", 0) + 1, len(df_15)):
             r = df_15.iloc[i]
             if t["sens"] == "ACHAT":
-                if r["l"] <= t["sl"]: t["statut"] = "FERME"; t["resultat"] = "LOSS"; solde -= t["risque"]; break
+                if r["l"] <= t["sl"]: t["statut"] = "FERME"; t["resultat"] = "PERDU"; solde -= t["risque"]; break
                 if r["h"] >= t["tp1"] and not t["tp1_touche"]: t["tp1_touche"] = True; solde += t["gain_tp1"]; t["sl"] = t["entree"]; updated = True
-                if r["h"] >= t["tp2"]: t["statut"] = "FERME"; t["resultat"] = "WIN"; solde += t["gain_tp2"]; break
+                if r["h"] >= t["tp2"]: t["statut"] = "FERME"; t["resultat"] = "GAGNE"; solde += t["gain_tp2"]; break
             else:
-                if r["h"] >= t["sl"]: t["statut"] = "FERME"; t["resultat"] = "LOSS"; solde -= t["risque"]; break
+                if r["h"] >= t["sl"]: t["statut"] = "FERME"; t["resultat"] = "PERDU"; solde -= t["risque"]; break
                 if r["l"] <= t["tp1"] and not t["tp1_touche"]: t["tp1_touche"] = True; solde += t["gain_tp1"]; t["sl"] = t["entree"]; updated = True
-                if t["l"] <= t["tp2"]: t["statut"] = "FERME"; t["resultat"] = "WIN"; solde += t["gain_tp2"]; break
+                if r["l"] <= t["tp2"]: t["statut"] = "FERME"; t["resultat"] = "GAGNE"; solde += t["gain_tp2"]; break
     JOURNAL["solde"] = solde
     if updated: sauvegarder_journal()
 
@@ -112,54 +112,45 @@ def generer_rapport_professionnel():
     t = JOURNAL["trades"]
     solde = JOURNAL["solde"]
     depart = CONFIG["backtest"]["solde_depart"]
-    
-    # On ne prend que les trades fermés pour les stats
     fermes = [x for x in t if x["statut"] == "FERME"]
-    gagnants = [x for x in fermes if x.get("resultat") == "WIN"]
-    perdants = [x for x in fermes if x.get("resultat") == "LOSS"]
+    gagnants = [x for x in fermes if x.get("resultat") == "GAGNE"]
+    perdants = [x for x in fermes if x.get("resultat") == "PERDU"]
     
     total = len(fermes)
-    wr = (len(gagnants) / total * 100) if total > 0 else 0
-    
-    # Calcul du P&L
+    taux_reussite = (len(gagnants) / total * 100) if total > 0 else 0
     pnl = solde - depart
     
-    # Calcul des gains/pertes moyens
     gain_moyen = sum(x["gain_tp2"] for x in gagnants) / len(gagnants) if gagnants else 0
     perte_moyenne = sum(x["risque"] for x in perdants) / len(perdants) if perdants else 0
     
-    # Profit Factor
     total_gains = sum(x["gain_tp2"] for x in gagnants)
     total_pertes = sum(x["risque"] for x in perdants)
-    profit_factor = total_gains / total_pertes if total_pertes > 0 else 0
+    facteur_profit = total_gains / total_pertes if total_pertes > 0 else 0
     
-    # Drawdown (simplifié : la plus grosse perte consécutive)
-    max_dd = 0
-    current_dd = 0
+    perte_max = 0
+    current = 0
     for x in fermes:
-        if x.get("resultat") == "LOSS":
-            current_dd += x["risque"]
-            max_dd = max(max_dd, current_dd)
-        else:
-            current_dd = 0
+        if x.get("resultat") == "PERDU": current += x["risque"]; perte_max = max(perte_max, current)
+        else: current = 0
     
-    # Série de gains/pertes
-    serie = "".join(["W" if x.get("resultat") == "WIN" else "L" for x in fermes[-10:]])
+    serie = "".join(["G" if x.get("resultat") == "GAGNE" else "P" for x in fermes[-10:]])
     
     txt = f"\n\n📊 **STATISTIQUES DE TRADING**\n"
     txt += f"━━━━━━━━━━━━━━━━━━━━━\n"
-    txt += f"💰 **COMPTE**\n"
-    txt += f"• Solde : {solde:.2f}$ (Départ : {depart:.2f}$)\n"
-    txt += f"• P&L : {pnl:+.2f}$ ({(pnl/depart*100):+.1f}%)\n"
+    txt += f"💰 **COMPTE VIRTUEL**\n"
+    txt += f"• Solde actuel : {solde:.2f}$\n"
+    txt += f"• Solde de départ : {depart:.2f}$\n"
+    txt += f"• Gain/Perte : {pnl:+.2f}$ ({(pnl/depart*100):+.1f}%)\n"
     txt += f"━━━━━━━━━━━━━━━━━━━━━\n"
     txt += f"📈 **PERFORMANCE**\n"
-    txt += f"• Trades : {total} ({len(gagnants)}W / {len(perdants)}L)\n"
-    txt += f"• Winrate : {wr:.0f}%\n"
-    txt += f"• Profit Factor : {profit_factor:.2f}\n"
+    txt += f"• Trades clôturés : {total}\n"
+    txt += f"• Gagnants : {len(gagnants)} | Perdants : {len(perdants)}\n"
+    txt += f"• Taux de réussite : {taux_reussite:.0f}%\n"
+    txt += f"• Facteur de profit : {facteur_profit:.2f}\n"
     txt += f"• Gain moyen : {gain_moyen:.2f}$\n"
     txt += f"• Perte moyenne : {perte_moyenne:.2f}$\n"
-    txt += f"• Drawdown max : {max_dd:.2f}$\n"
-    txt += f"• Série récente : {serie if serie else 'Aucune'}\n"
+    txt += f"• Perte maximale : {perte_max:.2f}$\n"
+    txt += f"• Série récente (10 derniers) : {serie if serie else 'Aucun'}\n"
     txt += f"━━━━━━━━━━━━━━━━━━━━━\n"
     
     en_cours = [x for x in t if x["statut"] == "EN COURS"]
@@ -169,8 +160,8 @@ def generer_rapport_professionnel():
         txt += f"• Sens : {d['sens']}\n"
         txt += f"• Entrée : {d['entree']:.2f}\n"
         txt += f"• SL : {d['sl']:.2f}\n"
-        txt += f"• TP1 : {d['tp1']:.2f} {'✅ Touché' if d['tp1_touche'] else '⏳'}\n"
-        txt += f"• TP2 : {d['tp2']:.2f} ⏳\n"
+        txt += f"• TP1 : {d['tp1']:.2f} {'✅ Touché' if d['tp1_touche'] else '⏳ En attente'}\n"
+        txt += f"• TP2 : {d['tp2']:.2f} ⏳ En attente\n"
         if d['tp1_touche']: txt += f"• Break-Even : ✅ SL remonté à {d['sl']:.2f}\n"
     else:
         txt += f"🔹 Aucun trade en cours. En attente d'un signal.\n"
@@ -188,6 +179,16 @@ def figure(df, tend, sig, tf_label, pair_name):
         ax.add_patch(Rectangle((i-0.3, min(r['o'], r['c'])), 0.6, abs(r['o']-r['c']), facecolor=col, edgecolor=col))
     ax.plot(df.index, df["sma_f"], color="cyan", lw=1.2, label="SMA 3")
     ax.plot(df.index, df["sma_s"], color="yellow", lw=1.2, label="SMA 25")
+    
+    if tf_label == "M15":
+        en_cours = [x for x in JOURNAL["trades"] if x["statut"] == "EN COURS"]
+        if en_cours:
+            t = en_cours[-1]
+            ax.axhline(t["entree"], color="white", ls="-", lw=1.5, label=f"Entrée {t['entree']:.2f}")
+            ax.axhline(t["sl"], color="red", ls="--", lw=1.5, label=f"SL {t['sl']:.2f}")
+            ax.axhline(t["tp1"], color="lime", ls=":", lw=1.5, label=f"TP1 {t['tp1']:.2f}")
+            ax.axhline(t["tp2"], color="green", ls=":", lw=1.5, label=f"TP2 {t['tp2']:.2f}")
+            
     ax.set_title(f"{pair_name} - {tf_label} | {tend} | {sig or ''}", color="white")
     ax.tick_params(colors='white'); ax.grid(color='#333333', ls='--', alpha=0.5)
     ax.legend(loc="upper left", facecolor='#1e1e1e', labelcolor='white')
@@ -218,7 +219,7 @@ def analyser(pair_key, source, now):
         if aligne:
             sig = check_sma_croisement(df_15, tend_h1)
         
-        log(f"{pair_key} ({source}) analysé. H1:{tend_h1} M30:{tend_m30} Signal: {sig}")
+        log(f"{pair_key} analysé. H1:{tend_h1} M30:{tend_m30} Signal: {sig}")
         
         if sig and not any(x["statut"] == "EN COURS" for x in JOURNAL["trades"]):
             atr = (df_15["h"] - df_15["l"]).rolling(14).mean().iloc[-1]
