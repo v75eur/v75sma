@@ -78,31 +78,48 @@ def verifier_trades(df_15):
     trades = JOURNAL["trades"]
     solde = JOURNAL["solde"]
     updated = False
+    atr_actuel = (df_15["h"] - df_15["l"]).rolling(14).mean().iloc[-1]
+    
     for t in trades:
         if t["statut"] == "FERME": continue
         for i in range(t.get("idx_ouverture", 0) + 1, len(df_15)):
             r = df_15.iloc[i]
             if t["sens"] == "ACHAT":
                 if r["l"] <= t["sl"]: t["statut"] = "FERME"; t["resultat"] = "PERDU"; solde -= t["risque"]; break
-                if r["h"] >= t["tp1"] and not t["tp1_touche"]: t["tp1_touche"] = True; solde += t["gain_tp1"]; t["sl"] = t["entree"]; updated = True
+                if r["h"] >= t["tp1"] and not t["tp1_touche"]:
+                    t["tp1_touche"] = True; solde += t["gain_tp1"]; t["sl"] = t["entree"]; updated = True
+                    if CONFIG["parametres_risque"]["trailing_stop_active"]:
+                        t["trailing_actif"] = True
+                        t["trailing_distance"] = CONFIG["parametres_risque"]["trailing_stop_distance"] * atr_actuel
+                if t.get("trailing_actif") and r["c"] > t["sl"]:
+                    nouveau_sl = r["c"] - t["trailing_distance"]
+                    if nouveau_sl > t["sl"]: t["sl"] = nouveau_sl; updated = True
                 if r["h"] >= t["tp2"]: t["statut"] = "FERME"; t["resultat"] = "GAGNE"; solde += t["gain_tp2"]; break
             else:
                 if r["h"] >= t["sl"]: t["statut"] = "FERME"; t["resultat"] = "PERDU"; solde -= t["risque"]; break
-                if r["l"] <= t["tp1"] and not t["tp1_touche"]: t["tp1_touche"] = True; solde += t["gain_tp1"]; t["sl"] = t["entree"]; updated = True
+                if r["l"] <= t["tp1"] and not t["tp1_touche"]:
+                    t["tp1_touche"] = True; solde += t["gain_tp1"]; t["sl"] = t["entree"]; updated = True
+                    if CONFIG["parametres_risque"]["trailing_stop_active"]:
+                        t["trailing_actif"] = True
+                        t["trailing_distance"] = CONFIG["parametres_risque"]["trailing_stop_distance"] * atr_actuel
+                if t.get("trailing_actif") and r["c"] < t["sl"]:
+                    nouveau_sl = r["c"] + t["trailing_distance"]
+                    if nouveau_sl < t["sl"]: t["sl"] = nouveau_sl; updated = True
                 if r["l"] <= t["tp2"]: t["statut"] = "FERME"; t["resultat"] = "GAGNE"; solde += t["gain_tp2"]; break
     JOURNAL["solde"] = solde
     if updated: sauvegarder_journal()
 
 def ouvrir_trade(sens, prix, atr, idx, now):
-    cfg = CONFIG["backtest"]
-    sl_dist = atr * cfg["ratio_sl"]
-    tp1_dist = sl_dist * cfg["ratio_tp1"]
-    tp2_dist = sl_dist * cfg["ratio_tp2"]
+    cfg = CONFIG["parametres_risque"]
+    sl_dist = atr * cfg["stop_loss_multiplier"]
+    tp1_dist = sl_dist * cfg["tp1_multiplier"]
+    tp2_dist = sl_dist * cfg["tp2_multiplier"]
     if sens == "ACHAT": sl = prix - sl_dist; tp1 = prix + tp1_dist; tp2 = prix + tp2_dist
     else: sl = prix + sl_dist; tp1 = prix - tp1_dist; tp2 = prix - tp2_dist
     trade = {"date": str(now), "sens": sens, "entree": prix, "sl": sl, "tp1": tp1, "tp2": tp2,
-             "tp1_touche": False, "risque": abs(sl_dist * cfg["valeur_pip"] * 100),
-             "gain_tp1": abs(tp1_dist * cfg["valeur_pip"] * 100), "gain_tp2": abs(tp2_dist * cfg["valeur_pip"] * 100),
+             "tp1_touche": False, "risque": abs(sl_dist * CONFIG["backtest"]["valeur_pip"] * 100),
+             "gain_tp1": abs(tp1_dist * CONFIG["backtest"]["valeur_pip"] * 100), 
+             "gain_tp2": abs(tp2_dist * CONFIG["backtest"]["valeur_pip"] * 100),
              "statut": "EN COURS", "resultat": None, "idx_ouverture": idx}
     JOURNAL["trades"].append(trade)
     sauvegarder_journal()
@@ -119,20 +136,16 @@ def generer_rapport_professionnel():
     total = len(fermes)
     taux_reussite = (len(gagnants) / total * 100) if total > 0 else 0
     pnl = solde - depart
-    
     gain_moyen = sum(x["gain_tp2"] for x in gagnants) / len(gagnants) if gagnants else 0
     perte_moyenne = sum(x["risque"] for x in perdants) / len(perdants) if perdants else 0
-    
     total_gains = sum(x["gain_tp2"] for x in gagnants)
     total_pertes = sum(x["risque"] for x in perdants)
     facteur_profit = total_gains / total_pertes if total_pertes > 0 else 0
-    
     perte_max = 0
     current = 0
     for x in fermes:
         if x.get("resultat") == "PERDU": current += x["risque"]; perte_max = max(perte_max, current)
         else: current = 0
-    
     serie = "".join(["G" if x.get("resultat") == "GAGNE" else "P" for x in fermes[-10:]])
     
     txt = f"\n\n📊 **STATISTIQUES DE TRADING**\n"
