@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from datetime import datetime
 import pandas as pd
+import numpy as np
 
 BENIN = pytz.timezone('Africa/Porto-Novo')
 CONFIG = json.load(open("config.json"))
@@ -76,12 +77,40 @@ def figure(df, tend, sig, tf_label, pair_name):
     df["sma_s"] = df["c"].rolling(SMA_SLOW).mean()
     fig, ax = plt.subplots(figsize=(10, 5), dpi=100)
     fig.patch.set_facecolor('#1e1e1e'); ax.set_facecolor('#1e1e1e')
+    
     for i, r in df.iterrows():
         col = '#26a69a' if r['c'] >= r['o'] else '#ef5350'
         ax.plot([i, i], [r['l'], r['h']], color=col, lw=1.2)
         ax.add_patch(Rectangle((i-0.3, min(r['o'], r['c'])), 0.6, abs(r['o']-r['c']), facecolor=col, edgecolor=col))
+        
     ax.plot(df.index, df["sma_f"], color="cyan", lw=1.2, label="SMA 3")
     ax.plot(df.index, df["sma_s"], color="yellow", lw=1.2, label="SMA 25")
+    
+    # --- TRACÉ DU CANAL DE TENDANCE (Basé sur les pivots) ---
+    window = 3
+    hauts, bas = [], []
+    for i in range(window, len(df) - window):
+        if df["h"].iloc[i] == df["h"].iloc[i-window:i+window+1].max(): hauts.append((i, df["h"].iloc[i]))
+        if df["l"].iloc[i] == df["l"].iloc[i-window:i+window+1].min(): bas.append((i, df["l"].iloc[i]))
+        
+    # Tracé du canal haut
+    if len(hauts) >= 2:
+        x1, y1 = hauts[-2]
+        x2, y2 = hauts[-1]
+        pente = (y2 - y1) / (x2 - x1) if (x2 - x1) != 0 else 0
+        x_end = len(df) - 1
+        y_end = y2 + pente * (x_end - x2)
+        ax.plot([x1, x_end], [y1, y_end], color="red", lw=1.5, ls="-.", label="Canal Haut")
+        
+    # Tracé du canal bas
+    if len(bas) >= 2:
+        x1, y1 = bas[-2]
+        x2, y2 = bas[-1]
+        pente = (y2 - y1) / (x2 - x1) if (x2 - x1) != 0 else 0
+        x_end = len(df) - 1
+        y_end = y2 + pente * (x_end - x2)
+        ax.plot([x1, x_end], [y1, y_end], color="lime", lw=1.5, ls="-.", label="Canal Bas")
+        
     ax.set_title(f"{pair_name} - {tf_label} | {tend} | {sig or ''}", color="white")
     ax.tick_params(colors='white'); ax.grid(color='#333333', ls='--', alpha=0.5)
     ax.legend(loc="upper left", facecolor='#1e1e1e', labelcolor='white')
@@ -116,13 +145,9 @@ def analyser(pair_key, source, now):
         mode_affichage = CONFIG.get("mode_affichage", "RAPPORT")
         
         doit_envoyer = False
-        if mode_affichage == "RAPPORT":
-            doit_envoyer = True
-        elif mode_affichage == "SIGNAL" and sig:
-            doit_envoyer = True
-            
-        if mode_notif == "EVENEMENT" and not sig:
-            doit_envoyer = False
+        if mode_affichage == "RAPPORT": doit_envoyer = True
+        elif mode_affichage == "SIGNAL" and sig: doit_envoyer = True
+        if mode_notif == "EVENEMENT" and not sig: doit_envoyer = False
             
         if doit_envoyer:
             texte = f"📊 **RAPPORT SMA {pair_key}** - {now.strftime('%a %d/%m %H:%M')}\n\n"
